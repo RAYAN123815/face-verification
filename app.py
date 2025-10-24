@@ -2,6 +2,11 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 import cv2
 import numpy as np
+import tensorflow as tf
+
+# 👇 TEMPORARY TEST LINE
+print("✅ TensorFlow loaded:", tf.__version__)
+
 from deepface import DeepFace
 import pandas as pd
 from datetime import datetime
