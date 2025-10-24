@@ -1,7 +1,7 @@
 streamlit
 streamlit-webrtc
-opencv-python
-numpy
+opencv-python-headless==4.8.1.78
+numpy<2
 pandas
 deepface
 av
