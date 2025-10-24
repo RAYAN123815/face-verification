@@ -3,8 +3,8 @@ streamlit-webrtc
 opencv-python-headless==4.8.1.78
 numpy<2
 pandas
-deepface
+deepface==0.0.95
+tensorflow==2.15.0
+keras==2.15.0
 av
-tensorflow
 torch
-keras
