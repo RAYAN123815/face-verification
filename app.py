@@ -214,36 +214,66 @@ with tab_register:
 
 # ------------------ Attendance ------------------
 with tab_attend:
-    st.header("Live Attendance (Local Only)")
+    st.header("🎥 Live Attendance (Hybrid Mode)")
+    st.write("Works locally via webcam or online via browser camera.")
 
-    col1, col2 = st.columns(2)
-    start_clicked = col1.button("▶️ Start Camera")
-    stop_clicked = col2.button("⛔ Stop Camera")
-
-    if start_clicked:
-        st.session_state.camera_running = True
-    if stop_clicked:
-        st.session_state.camera_running = False
+    # Try to open local camera to detect if we're running locally
+    cap_test = cv2.VideoCapture(0)
+    local_camera = cap_test.isOpened()
+    cap_test.release()
 
     frame_display = st.empty()
     status_display = st.empty()
 
-    if st.session_state.camera_running:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            st.error("⚠️ Camera not accessible in cloud. Run locally for live recognition.")
+    if not local_camera:
+        # --- CLOUD MODE (Streamlit camera input) ---
+        st.info("🌐 Running in cloud mode — using browser camera for attendance.")
+        uploaded_image = st.camera_input("Align your face and capture to mark attendance")
+
+        if uploaded_image:
+            frame = cv2.imdecode(np.frombuffer(uploaded_image.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            if not has_face(frame_rgb):
+                st.error("❌ No face detected. Please ensure good lighting.")
+            else:
+                name_found = find_identity(frame_rgb)
+                if name_found:
+                    if not st.session_state.last_marked_today.get(name_found):
+                        mark_attendance_db(name_found)
+                        st.session_state.last_marked_today[name_found] = True
+                        st.success(f"✅ Attendance marked for {name_found}")
+                    else:
+                        st.info(f"✅ Already marked today: {name_found}")
+                else:
+                    st.error("❌ Face not recognized. Try again.")
+
+    else:
+        # --- LOCAL MODE (OpenCV live camera) ---
+        col1, col2 = st.columns(2)
+        start_clicked = col1.button("▶️ Start Camera")
+        stop_clicked = col2.button("⛔ Stop Camera")
+
+        if start_clicked:
+            st.session_state.camera_running = True
+        if stop_clicked:
             st.session_state.camera_running = False
-        else:
-            status_display.info("Camera running — align your face for recognition...")
+
+        if st.session_state.camera_running:
+            cap = cv2.VideoCapture(0)
+            status_display.info("Camera running — align face for recognition...")
+
             while st.session_state.camera_running:
                 ret, frame = cap.read()
                 if not ret:
                     status_display.error("Camera read failed.")
                     break
+
                 frame = cv2.flip(frame, 1)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                faces = face_cascade.detectMultiScale(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY), 1.1, 4)
-                name_found = None
+                faces = face_cascade.detectMultiScale(
+                    cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY), 1.1, 4
+                )
 
                 if len(faces) > 0:
                     name_found = find_identity(frame_rgb)
@@ -255,24 +285,27 @@ with tab_attend:
                         else:
                             status_display.info(f"✅ Already marked today: {name_found}")
                         for (x, y, w, h) in faces:
-                            cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), (0, 200, 0), 3)
-                            cv2.putText(frame_rgb, f"{name_found} ✓", (x, y-10),
+                            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 200, 0), 3)
+                            cv2.putText(frame_rgb, f"{name_found} ✓", (x, y - 10),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 0), 3)
                     else:
                         for (x, y, w, h) in faces:
-                            cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), (200, 0, 0), 3)
-                            cv2.putText(frame_rgb, "Unknown ✗", (x, y-10),
+                            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (200, 0, 0), 3)
+                            cv2.putText(frame_rgb, "Unknown ✗", (x, y - 10),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 0, 0), 3)
                         status_display.error("❌ Face not recognized")
                 else:
                     status_display.info("No face detected — align properly")
+
                 frame_display.image(frame_rgb, use_column_width=True)
                 time.sleep(0.07)
+
             cap.release()
             frame_display.empty()
             status_display.info("Camera stopped.")
-    else:
-        frame_display.info("Camera is stopped. Click ▶️ Start Camera to begin.")
+        else:
+            frame_display.info("Camera stopped. Click ▶️ Start Camera to begin.")
+
 
 # ------------------ Weekly Summary ------------------
 with tab_week:
