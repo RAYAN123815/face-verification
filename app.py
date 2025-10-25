@@ -1,12 +1,10 @@
 # app.py
-# Smart Face Attendance — Stable Build (Improved Face Detection)
-# Features:
-# - Guided 5-angle registration with hybrid detection (OpenCV + DeepFace)
-# - Auto brightness/contrast normalization
-# - Single start/stop camera control
+# Smart Face Attendance — Stable Build (Enhanced Registration & Detection)
+# - Hybrid OpenCV + DeepFace detection
+# - Multi-frame retry registration with debug image saving
+# - Auto camera index fallback
+# - Single start/stop camera
 # - One attendance per user per day
-# - Visual ✅/❌ overlay
-# - Compact attendance table
 
 import streamlit as st
 import cv2
@@ -17,7 +15,6 @@ from datetime import datetime
 import time
 import pandas as pd
 
-# Try import DeepFace
 try:
     from deepface import DeepFace
 except Exception as e:
@@ -25,17 +22,17 @@ except Exception as e:
     st.stop()
 
 # -------------------------
-# Config / Folders
+# Config
 # -------------------------
 st.set_page_config(page_title="Smart Face Attendance", layout="wide")
-st.title("🎯 Smart Face Recognition Attendance (Improved Build)")
+st.title("🎯 Smart Face Recognition Attendance (Stable & Enhanced)")
 
 DB_PATH = "attendance.db"
 FACES_DIR = "faces_db"
 os.makedirs(FACES_DIR, exist_ok=True)
 
 # -------------------------
-# Database functions
+# Database
 # -------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -86,16 +83,14 @@ def read_attendance_df():
     return df
 
 # -------------------------
-# Face detection helpers
+# Face Detection Helpers
 # -------------------------
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 def has_face(frame_rgb):
-    """
-    Checks if a face exists using OpenCV first, then DeepFace fallback.
-    """
+    """Check for faces using OpenCV first, then DeepFace fallback."""
     try:
-        frame_rgb = cv2.convertScaleAbs(frame_rgb, alpha=1.2, beta=25)
+        frame_rgb = cv2.convertScaleAbs(frame_rgb, alpha=1.15, beta=25)
         gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(70, 70))
         if len(faces) > 0:
@@ -108,9 +103,7 @@ def has_face(frame_rgb):
     return False
 
 def find_identity(frame_rgb, db_path=FACES_DIR):
-    """
-    Returns recognized name or None
-    """
+    """Return recognized name or None."""
     try:
         res = DeepFace.find(img_path=frame_rgb, db_path=db_path, model_name="Facenet", enforce_detection=False, silent=True)
         if isinstance(res, list) and len(res) > 0 and len(res[0]) > 0:
@@ -128,7 +121,6 @@ def find_identity(frame_rgb, db_path=FACES_DIR):
 # Init
 # -------------------------
 init_db()
-
 if "camera_running" not in st.session_state:
     st.session_state.camera_running = False
 if "last_marked_today" not in st.session_state:
@@ -149,7 +141,7 @@ tab_register, tab_attend, tab_week, tab_admin = st.tabs(["🧍 Register", "🎥 
 
 # --- Registration ---
 with tab_register:
-    st.header("Register New User (Guided Multi-Angle)")
+    st.header("Register New User (Multi-Angle + Retry)")
     reg_name = st.text_input("Full name to register", key="reg_name")
     if st.button("Start Registration", key="start_registration"):
         if not reg_name.strip():
@@ -157,7 +149,17 @@ with tab_register:
         else:
             name = reg_name.strip().replace(" ", "_")
             st.info(f"Registering {name}...")
-            cap = cv2.VideoCapture(0)
+
+            # Try multiple camera indices
+            cap = None
+            for cam_idx in (0, 1, 2):
+                cap = cv2.VideoCapture(cam_idx)
+                if cap.isOpened():
+                    break
+            if not cap or not cap.isOpened():
+                st.error("No camera found. Close other apps using it and retry.")
+                st.stop()
+
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             angles = [
@@ -176,24 +178,37 @@ with tab_register:
                     preview.warning(f"{instruct} — capturing in {i}...")
                     time.sleep(1)
 
-                ret, frame = cap.read()
-                if not ret:
-                    preview.error("Camera error.")
+                detected = False
+                captured_frame = None
+                debug_frame = None
+
+                # Try multiple frames for reliability
+                for attempt in range(10):
+                    ret, frame = cap.read()
+                    if not ret:
+                        time.sleep(0.1)
+                        continue
+                    frame = cv2.flip(frame, 1)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if has_face(frame_rgb):
+                        detected = True
+                        captured_frame = frame_rgb
+                        break
+                    debug_frame = frame_rgb
+                    time.sleep(0.1)
+
+                if not detected:
+                    if debug_frame is not None:
+                        debug_path = os.path.join(FACES_DIR, f"DEBUG_{name}_{tag}.jpg")
+                        cv2.imwrite(debug_path, cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR))
+                        preview.warning(f"No face detected for {tag}. Saved debug: {debug_path}")
                     success_all = False
                     break
 
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_rgb = cv2.convertScaleAbs(frame_rgb, alpha=1.2, beta=25)
-                preview.image(frame_rgb, caption=f"Captured {tag}", use_column_width=True)
-
-                if not has_face(frame_rgb):
-                    preview.warning(f"No face detected for {tag}. Try adjusting lighting or face angle.")
-                    success_all = False
-                    break
-
+                preview.image(captured_frame, caption=f"Captured {tag}", use_column_width=True)
                 save_path = os.path.join(FACES_DIR, f"{name}_{tag}.jpg")
-                cv2.imwrite(save_path, cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-                time.sleep(0.5)
+                cv2.imwrite(save_path, cv2.cvtColor(captured_frame, cv2.COLOR_RGB2BGR))
+                time.sleep(0.4)
 
             cap.release()
             preview.empty()
@@ -203,11 +218,11 @@ with tab_register:
                 st.success(f"✅ Registration complete for {name}")
                 load_marked_today()
             else:
-                st.error("Registration failed. Please retry with better lighting.")
+                st.error("Registration failed. Please retry — better lighting, avoid shadows.")
 
 # --- Attendance ---
 with tab_attend:
-    st.header("Live Attendance (Single Camera Control)")
+    st.header("Live Attendance (Start / Stop)")
     col1, col2 = st.columns(2)
     start_clicked = col1.button("▶️ Start Camera", key="start_cam")
     stop_clicked = col2.button("⛔ Stop Camera", key="stop_cam")
