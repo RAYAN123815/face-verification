@@ -171,8 +171,12 @@ with tab_register:
         else:
             name = reg_name.strip().replace(" ", "_")  # store filenames with underscores
             st.session_state.register_feedback = f"Registering {name}..."
-            # open camera and guide
+            
+            # open camera
             cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # improve detection
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
             angles = [("front", "Look straight at camera"),
                       ("left", "Turn your face to the LEFT"),
                       ("right", "Turn your face to the RIGHT"),
@@ -180,36 +184,54 @@ with tab_register:
                       ("down", "Tilt your face DOWN")]
             preview = st.empty()
             success_all = True
+
             for tag, instruct in angles:
                 preview.info(instruct)
+                
                 # countdown 3..1
                 for i in range(3, 0, -1):
                     preview.warning(f"{instruct} — capturing in {i}...")
                     time.sleep(1)
+
                 ret, frame = cap.read()
                 if not ret:
                     preview.error("Camera read failed. Try again.")
                     success_all = False
                     break
+
+                # convert BGR to RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # boost brightness/contrast
+                frame_rgb = cv2.convertScaleAbs(frame_rgb, alpha=1.2, beta=30)
+
+                # show preview
                 preview.image(frame_rgb, caption=f"Captured {tag}", use_column_width=True)
-                # check face present
-                if not has_face(frame_rgb):
+
+                # check face presence (Haar cascade with relaxed params)
+                gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(80, 80))
+                
+                if len(faces) == 0:
                     preview.error(f"No face detected for {tag}. Please retry registration and ensure good lighting.")
                     success_all = False
                     break
-# save as name_tag.jpg (BGR saved)
+
+                # save image
                 save_path = os.path.join(FACES_DIR, f"{name}_{tag}.jpg")
                 cv2.imwrite(save_path, cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
                 time.sleep(0.5)
+
             cap.release()
             preview.empty()
+
             if success_all:
                 add_user_db(name)
                 st.success(f"Registration complete for {name}. You can now sign-in using the Attendance tab.")
                 load_marked_today()  # refresh in-memory marks
             else:
                 st.error("Registration failed. Please try again (better lighting, stable camera).")
+
 
 # --- Attendance tab ---
 with tab_attend:
