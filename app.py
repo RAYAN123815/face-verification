@@ -2,7 +2,7 @@
 # Smart Face Attendance — Hybrid Local & Cloud Compatible
 # - Uses OpenCV locally
 # - Uses st.camera_input() on Streamlit Cloud
-# - Multi-angle registration with retries and lighting check
+# - Multi-angle registration with instant preview and smooth feedback
 
 import streamlit as st
 import cv2
@@ -71,7 +71,6 @@ def read_attendance_df():
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 def has_face(frame_rgb):
-    """Detect face using OpenCV or DeepFace fallback"""
     try:
         gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
         faces = face_cascade.detectMultiScale(gray, 1.1, 4)
@@ -83,7 +82,6 @@ def has_face(frame_rgb):
         return False
 
 def find_identity(frame_rgb, db_path=FACES_DIR):
-    """Find known face identity"""
     try:
         res = DeepFace.find(img_path=frame_rgb, db_path=db_path,
                             model_name="Facenet", enforce_detection=False, silent=True)
@@ -129,7 +127,6 @@ with tab_register:
             name = reg_name.strip().replace(" ", "_")
             st.info(f"Starting registration for {name}...")
 
-            # Try local camera first
             cap = None
             for idx in (0, 1, 2):
                 test = cv2.VideoCapture(idx)
@@ -138,7 +135,6 @@ with tab_register:
                     break
                 test.release()
 
-            # --- ONLINE fallback ---
             use_streamlit_camera = False
             if not cap or not cap.isOpened():
                 st.warning("⚠️ No physical camera found. Using browser camera instead.")
@@ -147,29 +143,26 @@ with tab_register:
             angles = [
                 ("front", "Look straight at the camera"),
                 ("left", "Turn LEFT"),
-                ("right", "Turn RIGHT"),
-                ("up", "Tilt UP"),
-                ("down", "Tilt DOWN")
+                ("right", "Turn RIGHT")
             ]
 
-            preview = st.empty()
             success_all = True
+            preview = st.empty()
 
             for tag, instruction in angles:
                 st.subheader(instruction)
 
                 if use_streamlit_camera:
-                    # --- Browser camera ---
                     photo = st.camera_input(f"Capture your {tag} face")
                     if photo:
                         frame = cv2.imdecode(np.frombuffer(photo.getvalue(), np.uint8), cv2.IMREAD_COLOR)
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         if has_face(frame_rgb):
-                            cv2.imwrite(os.path.join(FACES_DIR, f"{name}_{tag}.jpg"),
-                                        cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-                            st.success(f"✅ {tag} captured successfully!")
+                            img_path = os.path.join(FACES_DIR, f"{name}_{tag}.jpg")
+                            cv2.imwrite(img_path, cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+                            st.image(frame_rgb, caption=f"{tag.capitalize()} captured successfully!", use_container_width=True)
                         else:
-                            st.error("No face detected. Try retaking with better lighting.")
+                            st.error("No face detected. Try again.")
                             success_all = False
                             break
                     else:
@@ -177,65 +170,53 @@ with tab_register:
                         success_all = False
                         break
                 else:
-                    # --- Local OpenCV camera ---
                     preview.info(f"{instruction} — hold still.")
-                    for i in range(3, 0, -1):
-                        preview.warning(f"Capturing in {i}...")
-                        time.sleep(1)
-
+                    time.sleep(2)
                     ret, frame = cap.read()
                     if not ret:
                         st.error("Camera read failed.")
                         success_all = False
                         break
-
                     frame = cv2.flip(frame, 1)
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    preview.image(frame_rgb, caption=f"Captured {tag}", use_column_width=True)
-
                     if not has_face(frame_rgb):
                         st.error("No face detected. Please ensure good lighting.")
                         success_all = False
                         break
+                    img_path = os.path.join(FACES_DIR, f"{name}_{tag}.jpg")
+                    cv2.imwrite(img_path, cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+                    st.image(frame_rgb, caption=f"{tag.capitalize()} captured!", use_container_width=True)
 
-                    cv2.imwrite(os.path.join(FACES_DIR, f"{name}_{tag}.jpg"),
-                                cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
-                    time.sleep(0.5)
-
-            if not use_streamlit_camera:
+            if not use_streamlit_camera and cap:
                 cap.release()
 
             if success_all:
                 add_user_db(name)
-                st.success(f"✅ Registration complete for {name}")
+                st.success(f"✅ {name} registered successfully!")
+                st.balloons()
                 load_marked_today()
             else:
-                st.error("Registration failed. Please retry with better lighting or stable camera.")
+                st.error("Registration failed. Try again with better lighting.")
 
 # ------------------ Attendance ------------------
 with tab_attend:
-    st.header("🎥 Live Attendance (Hybrid Mode)")
-    st.write("Works locally via webcam or online via browser camera.")
+    st.header("🎥 Mark Attendance")
+    st.write("Works via webcam (local) or browser camera (cloud).")
 
-    # Try to open local camera to detect if we're running locally
     cap_test = cv2.VideoCapture(0)
     local_camera = cap_test.isOpened()
     cap_test.release()
 
-    frame_display = st.empty()
-    status_display = st.empty()
-
     if not local_camera:
-        # --- CLOUD MODE (Streamlit camera input) ---
-        st.info("🌐 Running in cloud mode — using browser camera for attendance.")
-        uploaded_image = st.camera_input("Align your face and capture to mark attendance")
+        st.info("🌐 Using browser camera.")
+        uploaded_image = st.camera_input("Capture your face to mark attendance")
 
         if uploaded_image:
             frame = cv2.imdecode(np.frombuffer(uploaded_image.getvalue(), np.uint8), cv2.IMREAD_COLOR)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             if not has_face(frame_rgb):
-                st.error("❌ No face detected. Please ensure good lighting.")
+                st.error("❌ No face detected.")
             else:
                 name_found = find_identity(frame_rgb)
                 if name_found:
@@ -243,73 +224,17 @@ with tab_attend:
                         mark_attendance_db(name_found)
                         st.session_state.last_marked_today[name_found] = True
                         st.success(f"✅ Attendance marked for {name_found}")
+                        st.image(frame_rgb, caption=f"{name_found} marked present ✅", use_container_width=True)
                     else:
                         st.info(f"✅ Already marked today: {name_found}")
                 else:
                     st.error("❌ Face not recognized. Try again.")
-
     else:
-        # --- LOCAL MODE (OpenCV live camera) ---
-        col1, col2 = st.columns(2)
-        start_clicked = col1.button("▶️ Start Camera")
-        stop_clicked = col2.button("⛔ Stop Camera")
-
-        if start_clicked:
-            st.session_state.camera_running = True
-        if stop_clicked:
-            st.session_state.camera_running = False
-
-        if st.session_state.camera_running:
-            cap = cv2.VideoCapture(0)
-            status_display.info("Camera running — align face for recognition...")
-
-            while st.session_state.camera_running:
-                ret, frame = cap.read()
-                if not ret:
-                    status_display.error("Camera read failed.")
-                    break
-
-                frame = cv2.flip(frame, 1)
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                faces = face_cascade.detectMultiScale(
-                    cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY), 1.1, 4
-                )
-
-                if len(faces) > 0:
-                    name_found = find_identity(frame_rgb)
-                    if name_found:
-                        if not st.session_state.last_marked_today.get(name_found):
-                            mark_attendance_db(name_found)
-                            st.session_state.last_marked_today[name_found] = True
-                            status_display.success(f"✅ Attendance marked for {name_found}")
-                        else:
-                            status_display.info(f"✅ Already marked today: {name_found}")
-                        for (x, y, w, h) in faces:
-                            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 200, 0), 3)
-                            cv2.putText(frame_rgb, f"{name_found} ✓", (x, y - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 0), 3)
-                    else:
-                        for (x, y, w, h) in faces:
-                            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (200, 0, 0), 3)
-                            cv2.putText(frame_rgb, "Unknown ✗", (x, y - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 0, 0), 3)
-                        status_display.error("❌ Face not recognized")
-                else:
-                    status_display.info("No face detected — align properly")
-
-                frame_display.image(frame_rgb, use_column_width=True)
-                time.sleep(0.07)
-
-            cap.release()
-            frame_display.empty()
-            status_display.info("Camera stopped.")
-        else:
-            frame_display.info("Camera stopped. Click ▶️ Start Camera to begin.")
-
+        st.warning("For better compatibility, use Streamlit camera when running online.")
 
 # ------------------ Weekly Summary ------------------
 with tab_week:
-    st.header("Weekly Summary (Mon–Fri)")
+    st.header("📅 Weekly Summary")
     df = read_attendance_df()
     if df.empty:
         st.info("No attendance yet.")
@@ -327,7 +252,7 @@ with tab_week:
 # ------------------ Admin ------------------
 with tab_admin:
     st.header("Admin")
-    st.warning("This will delete all data and images.")
+    st.warning("⚠️ This will delete all data and images.")
     if st.button("🗑️ Delete ALL"):
         conn = sqlite3.connect(DB_PATH)
         conn.execute("DELETE FROM users")
@@ -335,10 +260,7 @@ with tab_admin:
         conn.commit()
         conn.close()
         for f in os.listdir(FACES_DIR):
-            try:
-                os.remove(os.path.join(FACES_DIR, f))
-            except Exception:
-                pass
+            os.remove(os.path.join(FACES_DIR, f))
         st.session_state.last_marked_today = {}
         st.success("All data and faces deleted.")
 
